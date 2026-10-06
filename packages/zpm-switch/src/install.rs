@@ -162,7 +162,10 @@ async fn install_berry(source: &cache:: CacheKey) -> Result<Command, Error> {
 }
 
 async fn install_yarnpkg_legacy(source: &cache:: CacheKey) -> Result<Command, Error> {
-    install_node_js_from_package(source, &source.to_url(), &Path::from_str("bin/yarn.js").unwrap()).await
+    let url
+        = source.to_npm_url().unwrap_or_else(|| source.to_url());
+
+    install_node_js_from_package(source, &url, &Path::from_str("bin/yarn.js").unwrap()).await
 }
 
 pub async fn install_package_manager(package_manager: &VersionPackageManagerReference) -> Result<Command, Error> {

@@ -24,17 +24,24 @@ fn get_npm_registry_server() -> String {
 
 impl CacheKey {
     pub fn to_npm_url(&self) -> Option<String> {
+        self.to_npm_url_with_registry(&get_npm_registry_server())
+    }
+
+    fn to_npm_url_with_registry(&self, registry: &str) -> Option<String> {
         if self.version.rc.as_ref().map_or(true, |rc| !rc.starts_with(&[VersionRc::String("git".into())])) {
             // zpm is available on npm since 6.0.0-rc.9
             if Range::from_file_string(">=6.0.0-rc.9").unwrap().check_ignore_rc(&self.version) {
-                let registry = get_npm_registry_server();
                 return Some(format!("{}/@yarnpkg/yarn-{}/-/yarn-{}-{}.tgz", registry, self.platform, self.platform, self.version.to_file_string()));
             }
 
             // berry has been published to npm since 2.4.1
             if Range::from_file_string(">=2.4.1 <6.0.0-0").unwrap().check_ignore_rc(&self.version) {
-                let registry = get_npm_registry_server();
                 return Some(format!("{}/@yarnpkg/cli-dist/-/cli-dist-{}.tgz", registry, self.version.to_file_string()));
+            }
+
+            // classic stable releases are published to npm as `yarn`; prereleases are not
+            if Range::from_file_string(">=1.0.0 <2.0.0").unwrap().check(&self.version) {
+                return Some(format!("{}/yarn/-/yarn-{}.tgz", registry, self.version.to_file_string()));
             }
         }
 
@@ -194,5 +201,65 @@ pub async fn ensure<R: Future<Output = Result<(), Error>>, F: FnOnce(Path) -> R>
 
             Ok(cache_path)
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REGISTRY: &str = "https://registry.example.com/api/npm/npm-remote";
+
+    fn key(version: &str, platform: &str) -> CacheKey {
+        CacheKey {
+            cache_version: CACHE_VERSION,
+            version: zpm_semver::Version::from_file_string(version).unwrap(),
+            platform: platform.to_string(),
+        }
+    }
+
+    fn npm_url(version: &str) -> Option<String> {
+        key(version, "linux-x64").to_npm_url_with_registry(REGISTRY)
+    }
+
+    #[test]
+    fn classic_uses_npm_yarn_package() {
+        assert_eq!(npm_url("1.22.22"), Some(format!("{REGISTRY}/yarn/-/yarn-1.22.22.tgz")));
+        assert_eq!(npm_url("1.0.0"), Some(format!("{REGISTRY}/yarn/-/yarn-1.0.0.tgz")));
+    }
+
+    #[test]
+    fn classic_respects_registry_env() {
+        std::env::set_var("YARNSW_NPM_REGISTRY_SERVER", REGISTRY);
+        let url = key("1.22.22", "linux-x64").to_npm_url();
+        std::env::remove_var("YARNSW_NPM_REGISTRY_SERVER");
+
+        assert_eq!(url, Some(format!("{REGISTRY}/yarn/-/yarn-1.22.22.tgz")));
+    }
+
+    #[test]
+    fn classic_prereleases_and_pre_1x_use_legacy_repository() {
+        assert_eq!(npm_url("1.0.0-rc.1"), None);
+        assert_eq!(npm_url("1.23.0-20220130.1630"), None);
+        assert_eq!(npm_url("0.27.5"), None);
+
+        assert_eq!(key("0.27.5", "linux-x64").to_url(), "https://repo.yarnpkg.com/releases/0.27.5/linux-x64");
+    }
+
+    #[test]
+    fn berry_is_unchanged() {
+        assert_eq!(npm_url("2.4.1"), Some(format!("{REGISTRY}/@yarnpkg/cli-dist/-/cli-dist-2.4.1.tgz")));
+        assert_eq!(npm_url("4.9.1"), Some(format!("{REGISTRY}/@yarnpkg/cli-dist/-/cli-dist-4.9.1.tgz")));
+        assert_eq!(npm_url("5.0.0-rc.1"), Some(format!("{REGISTRY}/@yarnpkg/cli-dist/-/cli-dist-5.0.0-rc.1.tgz")));
+        assert_eq!(npm_url("2.4.0"), None);
+        assert_eq!(npm_url("2.0.0-rc.1"), None);
+    }
+
+    #[test]
+    fn zpm_is_unchanged() {
+        assert_eq!(npm_url("6.0.0-rc.9"), Some(format!("{REGISTRY}/@yarnpkg/yarn-linux-x64/-/yarn-linux-x64-6.0.0-rc.9.tgz")));
+        assert_eq!(npm_url("6.1.0"), Some(format!("{REGISTRY}/@yarnpkg/yarn-linux-x64/-/yarn-linux-x64-6.1.0.tgz")));
+        assert_eq!(npm_url("6.0.0-rc.8"), None);
+        assert_eq!(npm_url("6.0.0-git.20250101.hash-abc"), None);
     }
 }
