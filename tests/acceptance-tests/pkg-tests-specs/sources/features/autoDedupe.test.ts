@@ -1,5 +1,5 @@
 import {Filename, PortablePath, ppath, xfs} from '@yarnpkg/fslib';
-import {tests}                from 'pkg-tests-core';
+import {tests}                              from 'pkg-tests-core';
 
 const {setPackageWhitelist} = tests;
 
